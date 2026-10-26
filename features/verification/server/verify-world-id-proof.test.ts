@@ -44,7 +44,6 @@ describe('verifyWorldIdProof', () => {
         success: true,
         action: GUILD_ID,
         nullifier: NULLIFIER,
-        protocol_version: '3.0',
         environment: 'production',
         results: [{ identifier: 'orb', success: true, nullifier: NULLIFIER }],
         ...overrides,
@@ -81,6 +80,31 @@ describe('verifyWorldIdProof', () => {
     const [url] = fetchMock.mock.calls[0] as [URL]
     expect(url.pathname).toBe('/api/v4/verify/rp_test123')
     expect(forwardedBody().environment).toBe('production')
+  })
+
+  it('accepts a v4 success response without protocol_version', async () => {
+    fetchMock.mockResolvedValue(
+      portalSuccess({
+        results: [{ identifier: 'proof_of_human', success: true, nullifier: NULLIFIER }],
+      })
+    )
+
+    const verification = await verifyWorldIdProof(
+      makeResult({
+        protocol_version: '4.0',
+        responses: [
+          {
+            identifier: 'proof_of_human',
+            signal_hash: hashSignal(USER_ID),
+            nullifier: NULLIFIER,
+          },
+        ],
+      })
+    )
+
+    expect(verification.success).toBe(true)
+    if (verification.success) expect(verification.results[0]?.identifier).toBe('proof_of_human')
+    expect(forwardedBody().protocol_version).toBe('4.0')
   })
 
   it('rejects a staging proof before calling the portal on a production deployment', async () => {

@@ -18,7 +18,6 @@ export type WorldIdProofVerification =
       success: true
       action: string
       nullifier: string
-      protocolVersion: '3.0' | '4.0'
       results: WorldIdProofResultItem[]
     }
   | {
@@ -32,7 +31,6 @@ type DeveloperPortalVerifyResponse = {
   success?: boolean
   action?: string
   nullifier?: string
-  protocol_version?: '3.0' | '4.0'
   environment?: string
   code?: string
   detail?: string
@@ -106,12 +104,11 @@ export const verifyWorldIdProof = async (
     }
   }
 
-  if (data.success && data.action && data.nullifier && data.protocol_version) {
+  if (data.success && data.action && data.nullifier) {
     return {
       success: true,
       action: data.action,
       nullifier: data.nullifier,
-      protocolVersion: data.protocol_version,
       results: data.results ?? [],
     }
   }
