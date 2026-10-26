@@ -16,7 +16,7 @@ export const craftConfigFormSchema = (t: ReturnType<typeof useTranslations>) => 
     .superRefine((values, ctx) => {
       // A verification level needs at least one role only when it is
       // enabled. Requiring roles for a disabled level too made the form
-      // unsavable in the common single-level setup (orb on, device off):
+      // impossible to save in the common single-level setup (orb on, device off):
       // validation failed before any request was sent, and the page could
       // only report a generic save error.
       if (values.deviceEnabled && values.deviceRoles.length === 0) {
