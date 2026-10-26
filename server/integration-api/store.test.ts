@@ -48,74 +48,58 @@ afterEach(async () => {
 })
 
 describe('Postgres initialization', () => {
-  it.each([
-    ['CREATE TABLE', 'CREATE TABLE IF NOT EXISTS integration_api_bot_configs'],
-    ['ALTER TABLE', 'ALTER TABLE integration_api_verification_results'],
-  ])(
-    'retries after a transient %s failure with one shared initialization',
-    async (_, failingSql) => {
-      vi.stubEnv(
-        'INTEGRATION_API_DATABASE_URL',
-        'postgresql://example.invalid/integration_test'
+  it('retries after a transient schema failure with one shared initialization', async () => {
+    vi.stubEnv('INTEGRATION_API_DATABASE_URL', 'postgresql://example.invalid/integration_test')
+
+    let failed = false
+    let holdRecovery = false
+    let releaseRecovery!: () => void
+    const recoveryGate = new Promise<void>(resolve => {
+      releaseRecovery = resolve
+    })
+
+    postgresQuery.mockImplementation(async statement => {
+      if (!failed && statement.startsWith('DO $$')) {
+        failed = true
+        throw new Error('database temporarily unavailable')
+      }
+
+      if (holdRecovery && statement.startsWith('DO $$')) {
+        await recoveryGate
+      }
+
+      return []
+    })
+
+    const store = getIntegrationApiStore()
+    const firstRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
+
+    await Promise.all(
+      firstRequests.map(request =>
+        expect(request).rejects.toThrow('database temporarily unavailable')
       )
+    )
+    expect(failed).toBe(true)
+    expect(
+      postgresQuery.mock.calls.filter(([statement]) => statement.startsWith('DO $$'))
+    ).toHaveLength(1)
 
-      let failed = false
-      let holdRecovery = false
-      let releaseRecovery!: () => void
-      const recoveryGate = new Promise<void>(resolve => {
-        releaseRecovery = resolve
-      })
+    holdRecovery = true
+    const retryRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
+    const retryOutcomes = Promise.allSettled(retryRequests)
+    expect(
+      postgresQuery.mock.calls.filter(([statement]) => statement.startsWith('DO $$'))
+    ).toHaveLength(2)
 
-      postgresQuery.mockImplementation(async statement => {
-        if (!failed && statement.startsWith(failingSql)) {
-          failed = true
-          throw new Error('database temporarily unavailable')
-        }
-
-        if (
-          holdRecovery &&
-          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
-        ) {
-          await recoveryGate
-        }
-
-        return []
-      })
-
-      const store = getIntegrationApiStore()
-      const firstRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
-
-      await Promise.all(
-        firstRequests.map(request =>
-          expect(request).rejects.toThrow('database temporarily unavailable')
-        )
-      )
-      expect(failed).toBe(true)
-      expect(
-        postgresQuery.mock.calls.filter(([statement]) =>
-          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
-        )
-      ).toHaveLength(1)
-
-      holdRecovery = true
-      const retryRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
-      const retryOutcomes = Promise.allSettled(retryRequests)
-      expect(
-        postgresQuery.mock.calls.filter(([statement]) =>
-          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
-        )
-      ).toHaveLength(2)
-
-      releaseRecovery()
-      await expect(retryOutcomes).resolves.toEqual([
-        { status: 'fulfilled', value: null },
-        { status: 'fulfilled', value: null },
-      ])
-      expect(
-        postgresQuery.mock.calls.filter(([statement]) => statement.startsWith('SELECT config'))
-      ).toHaveLength(2)
-    }
-  )
+    releaseRecovery()
+    await expect(retryOutcomes).resolves.toEqual([
+      { status: 'fulfilled', value: null },
+      { status: 'fulfilled', value: null },
+    ])
+    expect(
+      postgresQuery.mock.calls.filter(([statement]) => statement.startsWith('SELECT config'))
+    ).toHaveLength(2)
+  })
 })
 
 describe('file-backed verification results', () => {

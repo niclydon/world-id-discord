@@ -57,6 +57,15 @@ environment receives a `409` conflict and cannot replace the existing record.
 Rows written by older versions without an environment fail closed for role
 restoration and need an explicit, verified migration.
 
+The store initializes its tables under a transaction-scoped advisory lock so
+simultaneous cold starts cannot race PostgreSQL catalog creation. To rehearse
+the migration and nullifier ownership rule against a disposable PostgreSQL
+16/17 database, set `DISCORD_POSTGRES_TEST_URL` to that database's connection
+URL and run `pnpm exec vitest run server/integration-api/store.postgres.test.ts`.
+The test creates and drops uniquely named schemas. It executes the store's
+production SQL over a PostgreSQL wire connection; it does not validate the
+hosted Neon HTTP transport or deployment credentials.
+
 ## Local development
 
 For local development, you also will need [ngrok](https://ngrok.com/). After you log in, you can reach the [Setup & Installation](https://dashboard.ngrok.com/get-started/setup) section. There is an instruction on how to launch and configure `ngrok`

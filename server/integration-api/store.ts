@@ -196,25 +196,30 @@ class PostgresStore implements IntegrationApiStore {
     if (!this.initialized) {
       this.initialized = (async () => {
         await this.sql.query(
-          `CREATE TABLE IF NOT EXISTS integration_api_bot_configs (
-            guild_id text PRIMARY KEY,
-            config jsonb NOT NULL
-          )`
-        )
-        await this.sql.query(
-          `CREATE TABLE IF NOT EXISTS integration_api_verification_results (
-            guild_id text NOT NULL,
-            nullifier_hash text NOT NULL,
-            signal_type text NOT NULL,
-            user_id text NOT NULL,
-            environment text NOT NULL,
-            PRIMARY KEY (guild_id, nullifier_hash)
-          )`
-        )
-        // Older deployments may have created this table without an
-        // environment. Their rows remain untrusted until explicitly migrated.
-        await this.sql.query(
-          'ALTER TABLE integration_api_verification_results ADD COLUMN IF NOT EXISTS environment text'
+          `DO $$
+          BEGIN
+            -- One HTTP query is one transaction. This lock serializes cold
+            -- starts across instances: concurrent CREATE TABLE IF NOT EXISTS
+            -- can otherwise fail while PostgreSQL creates the table's type.
+            PERFORM pg_advisory_xact_lock(
+              hashtext('world-id-discord.integration-api'), hashtext(current_schema())
+            );
+            CREATE TABLE IF NOT EXISTS integration_api_bot_configs (
+              guild_id text PRIMARY KEY,
+              config jsonb NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS integration_api_verification_results (
+              guild_id text NOT NULL,
+              nullifier_hash text NOT NULL,
+              signal_type text NOT NULL,
+              user_id text NOT NULL,
+              environment text NOT NULL,
+              PRIMARY KEY (guild_id, nullifier_hash)
+            );
+            -- Older rows have no environment and remain untrusted.
+            ALTER TABLE integration_api_verification_results
+              ADD COLUMN IF NOT EXISTS environment text;
+          END $$`
         )
       })().catch(error => {
         this.initialized = null
