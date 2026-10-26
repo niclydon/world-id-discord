@@ -116,7 +116,7 @@ const eslintConfig = [
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
   boundariesConfig,
   {
-    ignores: ['.next/**/*', 'node_modules/**/*', 'public/**/*'],
+    ignores: ['.next/**/*', 'node_modules/**/*', 'public/**/*', 'next-env.d.ts'],
   },
 ]
 
