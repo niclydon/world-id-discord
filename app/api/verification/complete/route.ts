@@ -310,7 +310,10 @@ export const POST = async (request: NextRequest) => {
   const verifiedCredentialType = verifiedResult
     ? credentialTypeFromIdentifier(verifiedResult.identifier)
     : null
-  const verifiedNullifier = normalizeNullifier(proofVerification.nullifier)
+  const verifiedNullifier = normalizeNullifier(
+    proofVerification.nullifier,
+    result.protocol_version
+  )
 
   if (
     proofVerification.action !== guildId ||

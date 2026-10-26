@@ -16,6 +16,7 @@ import {
 const GUILD_ID = 'guild-123'
 const USER_ID = 'user-456'
 const NULLIFIER = `0x${'12'.repeat(32)}`
+const V4_DECIMAL_NULLIFIER = BigInt(NULLIFIER).toString(10)
 
 const makeResult = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -292,11 +293,23 @@ describe('nullifier helpers', () => {
     expect(getResultNullifier(result)).toBe(`0x${'1a'.repeat(32)}`)
   })
 
+  it('canonicalizes an IDKit 4 decimal nullifier without treating its digits as hex', () => {
+    const result = makeResult({
+      protocol_version: '4.0',
+      responses: [{ identifier: 'proof_of_human', nullifier: V4_DECIMAL_NULLIFIER }],
+    })
+
+    expect(V4_DECIMAL_NULLIFIER.length).toBeGreaterThan(64)
+    expect(getResultNullifier(result)).toBe(NULLIFIER)
+    expect(normalizeNullifier(NULLIFIER, '4.0')).toBe(NULLIFIER)
+    expect(normalizeNullifier('0xzz', '4.0')).toBeNull()
+  })
+
   it('returns null when the result carries no nullifier', () => {
     const result = makeResult({ responses: [{ identifier: 'orb' }] })
 
     expect(getResultNullifier(result)).toBeNull()
-    expect(normalizeNullifier('not-a-nullifier')).toBeNull()
+    expect(normalizeNullifier('not-a-nullifier', '3.0')).toBeNull()
   })
 })
 

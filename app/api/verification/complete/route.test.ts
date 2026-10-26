@@ -37,6 +37,7 @@ vi.mock('next-intl/server', () => ({
 const GUILD_ID = 'guild-123'
 const USER_ID = 'user-456'
 const NULLIFIER = `0x${'12'.repeat(32)}`
+const V4_DECIMAL_NULLIFIER = BigInt(NULLIFIER).toString(10)
 const TOKEN_FIELD = 'tok' + 'en'
 
 const fetchMock = vi.fn()
@@ -136,6 +137,46 @@ describe('POST /api/verification/complete', () => {
     expect(vi.mocked(saveVerificationResult).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(assignRoles).mock.invocationCallOrder[0]
     )
+  })
+
+  it('stores a v4 decimal nullifier canonically before granting a role', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          action: GUILD_ID,
+          nullifier: V4_DECIMAL_NULLIFIER,
+          environment: 'production',
+          results: [
+            { identifier: 'proof_of_human', success: true, nullifier: V4_DECIMAL_NULLIFIER },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+
+    const response = await post(
+      makeBody({
+        protocol_version: '4.0',
+        responses: [
+          {
+            identifier: 'proof_of_human',
+            signal_hash: hashSignal(USER_ID),
+            nullifier: V4_DECIMAL_NULLIFIER,
+            proof: ['1', '2', '3', '4', '5'],
+            issuer_schema_id: 1,
+            expires_at_min: 1,
+          },
+        ],
+      })
+    )
+
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(saveVerificationResult).toHaveBeenCalledWith(
+      expect.objectContaining({ nullifierHash: NULLIFIER, userId: USER_ID })
+    )
+    expect(assignRoles).toHaveBeenCalledOnce()
   })
 
   it('does not grant roles when saving a valid verification fails', async () => {

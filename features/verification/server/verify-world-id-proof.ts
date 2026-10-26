@@ -66,8 +66,7 @@ export const assertProofEnvironment = (result: VerificationResultPayload) => {
  *
  * Replaces the IDKit 2.x `verifyCloudProof` call, which targeted the legacy
  * `/api/v2/verify/{app_id}` endpoint. The v4 endpoint is keyed by RP id and
- * returns per-credential results; a top level `nullifier` (0x-prefixed hex) is
- * present on success.
+ * returns per-credential results and a top level `nullifier` on success.
  *
  * The result's `environment` is asserted against the deployment's expected
  * environment before the call, pinned to that value in the forwarded body, and
@@ -159,7 +158,9 @@ export const assertProofBinding = (
 
 /**
  * Returns the canonical (0x-prefixed, 64 digit hex) nullifier claimed by an
- * IDKit result, or null when the result carries no usable nullifier.
+ * IDKit result, or null when the result carries no usable nullifier. IDKit 4
+ * uniqueness responses encode nullifiers as decimal strings; legacy 3.0
+ * responses encode them as hex.
  */
 export const getResultNullifier = (result: VerificationResultPayload) => {
   const nullifier = result.responses[0]?.nullifier
@@ -168,11 +169,19 @@ export const getResultNullifier = (result: VerificationResultPayload) => {
     return null
   }
 
-  return normalizeNullifier(nullifier)
+  return normalizeNullifier(nullifier, result.protocol_version)
 }
 
-export const normalizeNullifier = (nullifier: string) => {
+export const normalizeNullifier = (
+  nullifier: string,
+  protocolVersion: VerificationResultPayload['protocol_version']
+) => {
   try {
+    if (protocolVersion === '4.0' && !/^0x/i.test(nullifier)) {
+      if (!/^[0-9]{1,78}$/.test(nullifier)) return null
+      return Nullifier.fromHex(`0x${BigInt(nullifier).toString(16)}`).toHex()
+    }
+
     return Nullifier.fromHex(nullifier).toHex()
   } catch {
     return null
