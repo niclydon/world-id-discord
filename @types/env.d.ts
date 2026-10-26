@@ -35,5 +35,15 @@ declare namespace NodeJS {
     DISCORD_INTEGRATION_API_URL: string | undefined
     DISCORD_INTEGRATION_API_SIGN_SECRET: string | undefined
     DISCORD_INTERACTION_TOKEN_SIGN_SECRET: string | undefined
+
+    // Self-hosted Discord integration API (app/discord/* routes)
+    // Postgres connection string for the integration API store. The Neon
+    // integration on Vercel injects DATABASE_URL when a database is
+    // connected to the project.
+    INTEGRATION_API_DATABASE_URL: string | undefined
+    DATABASE_URL: string | undefined
+    // JSON file backing the integration API store when no database is
+    // configured; ':memory:' selects an in-memory store.
+    INTEGRATION_API_STORE_FILE: string | undefined
   }
 }

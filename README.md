@@ -18,6 +18,36 @@ The bot verifies against a World ID 4.0 relying party (RP):
 
 See `@types/env.d.ts` for the full list of environment variables.
 
+## Self-hosted Discord integration API
+
+Bot configs and verification results are persisted through a small
+"Discord integration API" that the app calls server side (see
+`lib/discord-integration-api`). This repo ships a self-hosted stand-in
+for that API as route handlers in the same app, so a deployment does
+not depend on an external backend:
+
+- `GET`/`POST /discord/bot-config`
+- `GET`/`POST /discord/verification-result`
+
+The client builds these URLs with an absolute path, so the routes live
+at the app root and only the scheme and host of
+`DISCORD_INTEGRATION_API_URL` matter. To use the stand-in, point the
+variable at the deployment itself, for example
+`https://your-app.vercel.app`, and set
+`DISCORD_INTEGRATION_API_SIGN_SECRET` to a random secret. Requests are
+authorized with the short-lived HS256 JWT the client signs with that
+secret (subject `discord-integration`, the app URL as issuer, the
+integration API URL as audience); the stand-in verifies the same
+claims and rejects anything else.
+
+Records are stored in Postgres when `INTEGRATION_API_DATABASE_URL` or
+`DATABASE_URL` is set (on Vercel, connecting a Neon database to the
+project injects `DATABASE_URL`; tables are created on first use). With
+no database configured, records fall back to a JSON file
+(`INTEGRATION_API_STORE_FILE`, or a file in the OS temp directory),
+which is enough for local development but is not durable across
+serverless instances.
+
 ## Local development
 
 For local development, you also will need [ngrok](https://ngrok.com/). After you log in, you can reach the [Setup & Installation](https://dashboard.ngrok.com/get-started/setup) section. There is an instruction on how to launch and configure `ngrok`
