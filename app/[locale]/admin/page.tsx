@@ -28,7 +28,13 @@ const Admin = async () => {
     redirect(routes.signIn({ callbackUrl: routes.admin() }))
   }
 
-  const isAdmin = await userIsGuildAdmin(session.user.id, session.guild.id).catch(() => false)
+  const isAdmin = await userIsGuildAdmin(session.user.id, session.guild.id).catch(error => {
+    // A failed Discord lookup (bad bot credential, outage) is not the same
+    // as the user not being an admin; log it so the two stay distinguishable
+    // in production logs instead of collapsing into a silent sign-in loop.
+    console.error('Error checking guild admin status', error)
+    return false
+  })
 
   if (!isAdmin) {
     redirect(routes.signIn({ callbackUrl: routes.admin() }))

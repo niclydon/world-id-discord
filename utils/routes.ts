@@ -4,10 +4,10 @@ export const routes = {
 
   signIn: (params?: { callbackUrl?: string }) => {
     if (!params?.callbackUrl) {
-      return '/auth/signin' as const
+      return '/auth/sign-in' as const
     }
 
-    return `/auth/signin?callbackUrl=${params.callbackUrl}` as const
+    return `/auth/sign-in?callbackUrl=${params.callbackUrl}` as const
   },
 
   verification: () => '/verification' as const,
