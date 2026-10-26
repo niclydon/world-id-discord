@@ -6,6 +6,12 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getIntegrationApiStore, VerificationResultConflictError } from './store'
 
+const postgresQuery = vi.hoisted(() => vi.fn<(query: string) => Promise<unknown>>())
+
+vi.mock('@neondatabase/serverless', () => ({
+  neon: () => ({ query: postgresQuery }),
+}))
+
 const globalStore = globalThis as typeof globalThis & {
   integrationApiStore?: ReturnType<typeof getIntegrationApiStore>
 }
@@ -23,6 +29,7 @@ let storeFile: string
 
 beforeEach(async () => {
   delete globalStore.integrationApiStore
+  postgresQuery.mockReset()
   storeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'discord-integration-store-'))
   storeFile = path.join(storeDir, 'store.json')
 
@@ -38,6 +45,77 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   delete globalStore.integrationApiStore
   await fs.rm(storeDir, { recursive: true, force: true })
+})
+
+describe('Postgres initialization', () => {
+  it.each([
+    ['CREATE TABLE', 'CREATE TABLE IF NOT EXISTS integration_api_bot_configs'],
+    ['ALTER TABLE', 'ALTER TABLE integration_api_verification_results'],
+  ])(
+    'retries after a transient %s failure with one shared initialization',
+    async (_, failingSql) => {
+      vi.stubEnv(
+        'INTEGRATION_API_DATABASE_URL',
+        'postgresql://example.invalid/integration_test'
+      )
+
+      let failed = false
+      let holdRecovery = false
+      let releaseRecovery!: () => void
+      const recoveryGate = new Promise<void>(resolve => {
+        releaseRecovery = resolve
+      })
+
+      postgresQuery.mockImplementation(async statement => {
+        if (!failed && statement.startsWith(failingSql)) {
+          failed = true
+          throw new Error('database temporarily unavailable')
+        }
+
+        if (
+          holdRecovery &&
+          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
+        ) {
+          await recoveryGate
+        }
+
+        return []
+      })
+
+      const store = getIntegrationApiStore()
+      const firstRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
+
+      await Promise.all(
+        firstRequests.map(request =>
+          expect(request).rejects.toThrow('database temporarily unavailable')
+        )
+      )
+      expect(failed).toBe(true)
+      expect(
+        postgresQuery.mock.calls.filter(([statement]) =>
+          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
+        )
+      ).toHaveLength(1)
+
+      holdRecovery = true
+      const retryRequests = [store.getBotConfig('guild-1'), store.getBotConfig('guild-2')]
+      const retryOutcomes = Promise.allSettled(retryRequests)
+      expect(
+        postgresQuery.mock.calls.filter(([statement]) =>
+          statement.startsWith('CREATE TABLE IF NOT EXISTS integration_api_bot_configs')
+        )
+      ).toHaveLength(2)
+
+      releaseRecovery()
+      await expect(retryOutcomes).resolves.toEqual([
+        { status: 'fulfilled', value: null },
+        { status: 'fulfilled', value: null },
+      ])
+      expect(
+        postgresQuery.mock.calls.filter(([statement]) => statement.startsWith('SELECT config'))
+      ).toHaveLength(2)
+    }
+  )
 })
 
 describe('file-backed verification results', () => {

@@ -216,7 +216,10 @@ class PostgresStore implements IntegrationApiStore {
         await this.sql.query(
           'ALTER TABLE integration_api_verification_results ADD COLUMN IF NOT EXISTS environment text'
         )
-      })()
+      })().catch(error => {
+        this.initialized = null
+        throw error
+      })
     }
 
     await this.initialized
