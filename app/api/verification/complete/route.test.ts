@@ -66,7 +66,6 @@ const makeBody = (resultOverrides: Record<string, unknown> = {}) => ({
     nonce: 'nonce-1',
     environment: 'production',
     action: GUILD_ID,
-    environment: 'production',
     responses: [
       {
         identifier: 'orb',
@@ -422,6 +421,7 @@ describe('POST /api/verification/complete', () => {
       nullifier_hash: NULLIFIER,
       signal_type: CredentialType.Orb,
       user_id: USER_ID,
+      environment: 'production',
     })
 
     const response = await post(makeBody({ environment: 'staging' }))
