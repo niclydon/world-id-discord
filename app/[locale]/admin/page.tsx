@@ -21,6 +21,15 @@ export const generateMetadata = async () => {
   return { title: generateMetaTitle(t('Discord_Integration_Admin_Meta_Title')) }
 }
 
+const AdminAccessMessage = ({ title, description }: { title: string; description: string }) => (
+  <Modal className="max-w-[520px] w-full">
+    <div role="alert" className="p-8 text-center">
+      <h1 className="text-2xl font-semibold">{title}</h1>
+      <p className="mt-3 text-sm text-gray-300">{description}</p>
+    </div>
+  </Modal>
+)
+
 const Admin = async () => {
   const session = await getServerSession(authOptions)
 
@@ -28,10 +37,29 @@ const Admin = async () => {
     redirect(routes.signIn({ callbackUrl: routes.admin() }))
   }
 
-  const isAdmin = await userIsGuildAdmin(session.user.id, session.guild.id).catch(() => false)
+  let isAdmin: boolean
+
+  try {
+    isAdmin = await userIsGuildAdmin(session.user.id, session.guild.id)
+  } catch (error) {
+    console.error('Error checking guild admin status', error)
+    const t = await getTranslations()
+    return (
+      <AdminAccessMessage
+        title={t('Discord_Integration_Admin_Check_Unavailable_Title')}
+        description={t('Discord_Integration_Admin_Check_Unavailable_Description')}
+      />
+    )
+  }
 
   if (!isAdmin) {
-    redirect(routes.signIn({ callbackUrl: routes.admin() }))
+    const t = await getTranslations()
+    return (
+      <AdminAccessMessage
+        title={t('Discord_Integration_Admin_Access_Denied_Title')}
+        description={t('Discord_Integration_Admin_Access_Denied_Description')}
+      />
+    )
   }
 
   const guildId = session.guild.id
