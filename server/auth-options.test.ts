@@ -74,6 +74,9 @@ const partialGuild = (
   ...overrides,
 })
 
+const botGuildPage = (firstId: number, count = 200) =>
+  Array.from({ length: count }, (_, index) => partialGuild({ id: String(firstId + index) }))
+
 const mockGuildEndpoints = (
   userGuilds: RESTAPIPartialCurrentUserGuild[],
   botGuilds: RESTAPIPartialCurrentUserGuild[]
@@ -154,6 +157,120 @@ describe('authOptions signIn callback', () => {
     await expect(callSignIn(account)).resolves.toBe(true)
     expect(account.guild).toMatchObject({ id: 'guild-owned' })
     expect(createGuildCommands).toHaveBeenCalledWith('guild-owned')
+  })
+
+  it('resolves a managed guild beyond the first page of bot guilds', async () => {
+    const firstPage = botGuildPage(1000)
+    fetchMock.mockImplementation(async (input, init) => {
+      const authorization = (init?.headers as Record<string, string>).Authorization
+      const url = new URL(String(input))
+
+      if (authorization === `Bearer ${ACCESS_TOKEN}`) {
+        return new Response(
+          JSON.stringify([partialGuild({ id: '1200', name: 'Later Guild', permissions: '8' })])
+        )
+      }
+
+      if (authorization === `Bot ${BOT_TOKEN}`) {
+        const page =
+          url.searchParams.get('after') === '1199' ? botGuildPage(1200, 1) : firstPage
+        return new Response(JSON.stringify(page))
+      }
+
+      return new Response(null, { status: 401 })
+    })
+
+    const account = makeAccount()
+    await expect(callSignIn(account)).resolves.toBe(true)
+
+    expect(account.guild).toMatchObject({ id: '1200', name: 'Later Guild' })
+    expect(createGuildCommands).toHaveBeenCalledWith('1200')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ search: '?limit=200&after=1199' }),
+      expect.objectContaining({ headers: { Authorization: `Bot ${BOT_TOKEN}` } })
+    )
+  })
+
+  it('checks the page after exactly 200 bot guilds before resolving', async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const authorization = (init?.headers as Record<string, string>).Authorization
+      const after = new URL(String(input)).searchParams.get('after')
+
+      if (authorization === `Bearer ${ACCESS_TOKEN}`) {
+        return new Response(JSON.stringify([partialGuild({ id: '1000', permissions: '8' })]))
+      }
+
+      if (authorization === `Bot ${BOT_TOKEN}`) {
+        return new Response(JSON.stringify(after ? [] : botGuildPage(1000)))
+      }
+
+      return new Response(null, { status: 401 })
+    })
+
+    await expect(callSignIn(makeAccount())).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(createGuildCommands).toHaveBeenCalledWith('1000')
+  })
+
+  it('rejects when a second managed guild appears on a later bot page', async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const authorization = (init?.headers as Record<string, string>).Authorization
+      const after = new URL(String(input)).searchParams.get('after')
+
+      if (authorization === `Bearer ${ACCESS_TOKEN}`) {
+        return new Response(
+          JSON.stringify([
+            partialGuild({ id: '1000', permissions: '8' }),
+            partialGuild({ id: '1200', permissions: '32' }),
+          ])
+        )
+      }
+
+      if (authorization === `Bot ${BOT_TOKEN}`) {
+        return new Response(JSON.stringify(after ? botGuildPage(1200, 1) : botGuildPage(1000)))
+      }
+
+      return new Response(null, { status: 401 })
+    })
+
+    await expect(callSignIn(makeAccount())).resolves.toBe(false)
+    expect(createGuildCommands).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reason=no-guild-in-token-response,ambiguous-guilds,count=2')
+    )
+  })
+
+  it('rejects when the bounded bot lookup cannot prove its guild list is complete', async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const authorization = (init?.headers as Record<string, string>).Authorization
+      const after = new URL(String(input)).searchParams.get('after')
+
+      if (authorization === `Bearer ${ACCESS_TOKEN}`) {
+        return new Response(JSON.stringify([partialGuild({ id: '1000', permissions: '8' })]))
+      }
+
+      if (authorization === `Bot ${BOT_TOKEN}`) {
+        return new Response(JSON.stringify(botGuildPage(after ? Number(after) + 1 : 1000)))
+      }
+
+      return new Response(null, { status: 401 })
+    })
+
+    await expect(callSignIn(makeAccount())).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(26)
+    expect(createGuildCommands).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reason=no-guild-in-token-response,guild-lookup-failed')
+    )
+  })
+
+  it('rejects a repeated bot guild page instead of resolving from an incomplete list', async () => {
+    mockGuildEndpoints([partialGuild({ id: '1000', permissions: '8' })], botGuildPage(1000))
+
+    await expect(callSignIn(makeAccount())).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(createGuildCommands).not.toHaveBeenCalled()
   })
 
   it('rejects when the token response omits the guild and no guild qualifies', async () => {
