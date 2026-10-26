@@ -93,6 +93,7 @@ export const WorldIdVerifyButton = ({
           open={open}
           onOpenChange={setOpen}
           app_id={appId}
+          environment={process.env.NEXT_PUBLIC_WORLD_ID_ENVIRONMENT ?? 'production'}
           action={guild.id}
           action_description={`verify in ${guild.name} server.`}
           rp_context={rpContext}

@@ -1,6 +1,9 @@
 import { verificationResultItemSchema } from '@/schemas/verification-result-item'
 import { integrationApiError, integrationApiSuccess } from '@/server/integration-api/responses'
-import { getIntegrationApiStore } from '@/server/integration-api/store'
+import {
+  getIntegrationApiStore,
+  VerificationResultConflictError,
+} from '@/server/integration-api/store'
 import { verifyIntegrationApiRequest } from '@/server/integration-api/verify-request-auth'
 import { NextRequest } from 'next/server'
 
@@ -48,12 +51,15 @@ export const POST = async (request: NextRequest) => {
   }
 
   try {
-    // Saving is an upsert: a repeated save for the same (guild id,
-    // nullifier hash) key replaces the record and still succeeds, so
-    // retries by the client are safe.
+    // An exact retry succeeds, but a nullifier cannot be reassigned to
+    // another user or credential type within the guild.
     await getIntegrationApiStore().saveVerificationResult(parsed.data)
     return integrationApiSuccess(parsed.data)
   } catch (error) {
+    if (error instanceof VerificationResultConflictError) {
+      return integrationApiError(error.message, 409)
+    }
+
     console.error('Error saving verification result', error)
     return integrationApiError('Internal server error', 500)
   }

@@ -1,6 +1,7 @@
 import { BotConfig } from '@/schemas/bot-config'
 import { VerificationResultItem } from '@/schemas/verification-result-item'
 import { neon } from '@neondatabase/serverless'
+import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'fs'
 import os from 'os'
 import path from 'path'
@@ -16,12 +17,10 @@ import path from 'path'
  * 1. Postgres, when INTEGRATION_API_DATABASE_URL or DATABASE_URL is set
  *    (the Neon integration on Vercel injects DATABASE_URL when a database
  *    is connected to the project). This is the durable production backend.
- * 2. A JSON file at INTEGRATION_API_STORE_FILE (the literal value
- *    ':memory:' selects a process-local in-memory store, used by tests).
- * 3. A JSON file under the OS temp directory, so local development and
- *    trials work with no configuration. Records there survive warm
- *    restarts of a single instance only; connect a database for real
- *    durability.
+ * Postgres is required by default so concurrent instances share an atomic
+ * nullifier ownership constraint. Explicit local development and tests can
+ * use a JSON file at INTEGRATION_API_STORE_FILE (':memory:' selects
+ * process-local memory), or a JSON file under the OS temp directory.
  */
 export interface IntegrationApiStore {
   getBotConfig: (guildId: string) => Promise<BotConfig | null>
@@ -41,10 +40,24 @@ type StoreData = {
 const emptyData = (): StoreData => ({ botConfigs: {}, verificationResults: {} })
 
 const verificationKey = (guildId: string, nullifierHash: string) =>
-  `${guildId}:${nullifierHash}`
+  JSON.stringify([guildId, nullifierHash])
+
+export class VerificationResultConflictError extends Error {
+  constructor() {
+    super('Verification result conflicts with an existing record')
+    this.name = 'VerificationResultConflictError'
+  }
+}
+
+const sameVerificationResult = (left: VerificationResultItem, right: VerificationResultItem) =>
+  left.guild_id === right.guild_id &&
+  left.nullifier_hash === right.nullifier_hash &&
+  left.signal_type === right.signal_type &&
+  left.user_id === right.user_id &&
+  left.environment === right.environment
 
 class MemoryStore implements IntegrationApiStore {
-  private data: StoreData = emptyData()
+  constructor(private data: StoreData = emptyData()) {}
 
   snapshot(): StoreData {
     return this.data
@@ -63,52 +76,83 @@ class MemoryStore implements IntegrationApiStore {
   }
 
   async saveVerificationResult(item: VerificationResultItem) {
-    this.data.verificationResults[verificationKey(item.guild_id, item.nullifier_hash)] = item
+    const key = verificationKey(item.guild_id, item.nullifier_hash)
+    const existing = this.data.verificationResults[key]
+
+    if (existing && !sameVerificationResult(existing, item)) {
+      throw new VerificationResultConflictError()
+    }
+
+    if (!existing) {
+      this.data.verificationResults[key] = item
+    }
   }
 }
 
 class FileStore implements IntegrationApiStore {
   private memory = new MemoryStore()
-  private loaded = false
+  private loadPromise: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
 
   constructor(private filePath: string) {}
 
   private async load() {
-    if (this.loaded) {
-      return
+    if (!this.loadPromise) {
+      this.loadPromise = this.readFromDisk()
     }
 
-    this.loaded = true
+    await this.loadPromise
+  }
+
+  private async readFromDisk() {
+    let raw: string
+    try {
+      raw = await fs.readFile(this.filePath, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return
+      }
+
+      throw error
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StoreData>
+
+    for (const botConfig of Object.values(parsed.botConfigs ?? {})) {
+      await this.memory.saveBotConfig(botConfig)
+    }
+
+    for (const item of Object.values(parsed.verificationResults ?? {})) {
+      await this.memory.saveVerificationResult(item)
+    }
+  }
+
+  private async persist(data: StoreData) {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
+    const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
 
     try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<StoreData>
-
-      for (const botConfig of Object.values(parsed.botConfigs ?? {})) {
-        await this.memory.saveBotConfig(botConfig)
-      }
-
-      for (const item of Object.values(parsed.verificationResults ?? {})) {
-        await this.memory.saveVerificationResult(item)
-      }
-    } catch {
-      // A missing or unreadable file simply starts as an empty store.
+      await fs.writeFile(temporaryPath, JSON.stringify(data, null, 2), 'utf8')
+      await fs.rename(temporaryPath, this.filePath)
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined)
+      throw error
     }
   }
 
-  private async persist() {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    await fs.writeFile(this.filePath, JSON.stringify(this.memory.snapshot(), null, 2), 'utf8')
-  }
-
-  private async run<T>(operation: () => Promise<T>): Promise<T> {
+  private async run<T>(operation: (candidate: MemoryStore) => Promise<T>): Promise<T> {
     let result: T
 
     const task = async () => {
       await this.load()
-      result = await operation()
-      await this.persist()
+      const snapshot = this.memory.snapshot()
+      const candidate = new MemoryStore({
+        botConfigs: { ...snapshot.botConfigs },
+        verificationResults: { ...snapshot.verificationResults },
+      })
+      result = await operation(candidate)
+      await this.persist(candidate.snapshot())
+      this.memory = candidate
     }
 
     this.queue = this.queue.then(task, task)
@@ -123,8 +167,8 @@ class FileStore implements IntegrationApiStore {
   }
 
   async saveBotConfig(botConfig: BotConfig) {
-    await this.run(async () => {
-      await this.memory.saveBotConfig(botConfig)
+    await this.run(async candidate => {
+      await candidate.saveBotConfig(botConfig)
     })
   }
 
@@ -134,8 +178,8 @@ class FileStore implements IntegrationApiStore {
   }
 
   async saveVerificationResult(item: VerificationResultItem) {
-    await this.run(async () => {
-      await this.memory.saveVerificationResult(item)
+    await this.run(async candidate => {
+      await candidate.saveVerificationResult(item)
     })
   }
 }
@@ -163,8 +207,14 @@ class PostgresStore implements IntegrationApiStore {
             nullifier_hash text NOT NULL,
             signal_type text NOT NULL,
             user_id text NOT NULL,
+            environment text NOT NULL,
             PRIMARY KEY (guild_id, nullifier_hash)
           )`
+        )
+        // Older deployments may have created this table without an
+        // environment. Their rows remain untrusted until explicitly migrated.
+        await this.sql.query(
+          'ALTER TABLE integration_api_verification_results ADD COLUMN IF NOT EXISTS environment text'
         )
       })()
     }
@@ -195,7 +245,7 @@ class PostgresStore implements IntegrationApiStore {
   async getVerificationResult(guildId: string, nullifierHash: string) {
     await this.init()
     const rows = (await this.sql.query(
-      `SELECT guild_id, nullifier_hash, signal_type, user_id
+      `SELECT guild_id, nullifier_hash, signal_type, user_id, environment
        FROM integration_api_verification_results
        WHERE guild_id = $1 AND nullifier_hash = $2`,
       [guildId, nullifierHash]
@@ -206,20 +256,43 @@ class PostgresStore implements IntegrationApiStore {
 
   async saveVerificationResult(item: VerificationResultItem) {
     await this.init()
-    await this.sql.query(
+    const rows = (await this.sql.query(
       `INSERT INTO integration_api_verification_results
-        (guild_id, nullifier_hash, signal_type, user_id)
-       VALUES ($1, $2, $3, $4)
+        (guild_id, nullifier_hash, signal_type, user_id, environment)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (guild_id, nullifier_hash) DO UPDATE SET
-        signal_type = EXCLUDED.signal_type,
-        user_id = EXCLUDED.user_id`,
-      [item.guild_id, item.nullifier_hash, item.signal_type, item.user_id]
-    )
+        user_id = integration_api_verification_results.user_id
+       WHERE integration_api_verification_results.user_id = EXCLUDED.user_id
+         AND integration_api_verification_results.signal_type = EXCLUDED.signal_type
+         AND integration_api_verification_results.environment = EXCLUDED.environment
+       RETURNING guild_id`,
+      [item.guild_id, item.nullifier_hash, item.signal_type, item.user_id, item.environment]
+    )) as Array<{ guild_id: string }>
+
+    if (rows.length === 0) {
+      throw new VerificationResultConflictError()
+    }
+  }
+}
+
+const databaseUrl = () => process.env.INTEGRATION_API_DATABASE_URL || process.env.DATABASE_URL
+
+const localStoreAllowed = () =>
+  process.env.INTEGRATION_API_ALLOW_LOCAL_STORE === 'true' &&
+  process.env.NEXT_PUBLIC_APP_ENV === 'development' &&
+  !process.env.VERCEL &&
+  !process.env.VERCEL_ENV &&
+  (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development')
+
+const assertStorePolicy = () => {
+  if (!databaseUrl() && !localStoreAllowed()) {
+    throw new Error('Discord integration API requires a Postgres database URL')
   }
 }
 
 const createStore = (): IntegrationApiStore => {
-  const connectionString = process.env.INTEGRATION_API_DATABASE_URL ?? process.env.DATABASE_URL
+  assertStorePolicy()
+  const connectionString = databaseUrl()
 
   if (connectionString) {
     return new PostgresStore(connectionString)
@@ -241,7 +314,15 @@ const globalStore = globalThis as unknown as {
 }
 
 export const getIntegrationApiStore = (): IntegrationApiStore => {
-  if (!globalStore.integrationApiStore) {
+  // Recheck on every call so a cached local store cannot survive a runtime
+  // configuration change into a deployed environment.
+  assertStorePolicy()
+
+  if (
+    !globalStore.integrationApiStore ||
+    (databaseUrl() && !(globalStore.integrationApiStore instanceof PostgresStore)) ||
+    (!databaseUrl() && globalStore.integrationApiStore instanceof PostgresStore)
+  ) {
     globalStore.integrationApiStore = createStore()
   }
 

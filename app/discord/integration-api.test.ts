@@ -87,7 +87,11 @@ const makeBotConfig = (guild: string): BotConfig => ({
 beforeAll(async () => {
   vi.stubEnv('DISCORD_INTEGRATION_API_URL', API_URL)
   vi.stubEnv('DISCORD_INTEGRATION_API_SIGN_SECRET', SIGN_SECRET)
+  vi.stubEnv('INTEGRATION_API_DATABASE_URL', '')
+  vi.stubEnv('DATABASE_URL', '')
   vi.stubEnv('INTEGRATION_API_STORE_FILE', ':memory:')
+  vi.stubEnv('INTEGRATION_API_ALLOW_LOCAL_STORE', 'true')
+  vi.stubEnv('NEXT_PUBLIC_APP_ENV', 'development')
 
   const [fetchBotConfigModule, saveBotConfigModule, fetchResultModule, saveResultModule] =
     await Promise.all([
@@ -142,6 +146,7 @@ describe('verification result', () => {
     nullifierHash: '0xabc123',
     credentialType: CredentialType.Orb,
     userId: 'user-1',
+    environment: 'production' as const,
   }
 
   it('returns null when no record exists for the key', async () => {
@@ -163,28 +168,159 @@ describe('verification result', () => {
       nullifier_hash: item.nullifierHash,
       signal_type: item.credentialType,
       user_id: item.userId,
+      environment: item.environment,
     })
   })
 
-  it('treats a second save for the same key as an upsert', async () => {
+  it('allows an exact retry without changing the stored record', async () => {
     await client.saveVerificationResult(item)
-    await client.saveVerificationResult({ ...item, userId: 'user-2' })
+    await expect(client.saveVerificationResult(item)).resolves.toBeDefined()
 
     await expect(
       client.fetchVerificationResult({
         guildId: item.guildId,
         nullifierHash: item.nullifierHash,
       })
-    ).resolves.toMatchObject({ user_id: 'user-2' })
+    ).resolves.toMatchObject({ user_id: item.userId, signal_type: item.credentialType })
+  })
+
+  it('rejects a second user for a nullifier and preserves the first owner', async () => {
+    await client.saveVerificationResult(item)
+
+    await expect(
+      client.saveVerificationResult({ ...item, userId: 'user-2' })
+    ).rejects.toMatchObject({
+      cause: { status: 409 },
+    })
+
+    await expect(
+      client.fetchVerificationResult({
+        guildId: item.guildId,
+        nullifierHash: item.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: item.userId, signal_type: item.credentialType })
+  })
+
+  it('rejects a credential-type change for an existing nullifier', async () => {
+    await client.saveVerificationResult(item)
+
+    await expect(
+      client.saveVerificationResult({ ...item, credentialType: CredentialType.Device })
+    ).rejects.toMatchObject({ cause: { status: 409 } })
+
+    await expect(
+      client.fetchVerificationResult({
+        guildId: item.guildId,
+        nullifierHash: item.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: item.userId, signal_type: CredentialType.Orb })
+  })
+
+  it('rejects a World ID environment change for an existing nullifier', async () => {
+    await client.saveVerificationResult(item)
+
+    await expect(
+      client.saveVerificationResult({ ...item, environment: 'sandbox' })
+    ).rejects.toMatchObject({ cause: { status: 409 } })
+
+    await expect(
+      client.fetchVerificationResult({
+        guildId: item.guildId,
+        nullifierHash: item.nullifierHash,
+      })
+    ).resolves.toMatchObject({ environment: 'production' })
   })
 
   it('keys records by guild and nullifier together', async () => {
+    await client.saveVerificationResult(item)
+
     await expect(
       client.fetchVerificationResult({
         guildId: guildId('other-guild'),
         nullifierHash: item.nullifierHash,
       })
     ).resolves.toBeNull()
+
+    await client.saveVerificationResult({
+      ...item,
+      guildId: guildId('other-guild'),
+      userId: 'user-2',
+    })
+
+    await expect(
+      client.fetchVerificationResult({
+        guildId: guildId('other-guild'),
+        nullifierHash: item.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: 'user-2' })
+    await expect(
+      client.fetchVerificationResult({
+        guildId: item.guildId,
+        nullifierHash: item.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: item.userId })
+  })
+
+  it('does not confuse guild and nullifier values containing the same separator', async () => {
+    const first = { ...item, guildId: 'guild:a', nullifierHash: 'b', userId: 'user-1' }
+    const second = { ...item, guildId: 'guild', nullifierHash: 'a:b', userId: 'user-2' }
+
+    await client.saveVerificationResult(first)
+    await client.saveVerificationResult(second)
+
+    await expect(
+      client.fetchVerificationResult({
+        guildId: first.guildId,
+        nullifierHash: first.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: first.userId })
+    await expect(
+      client.fetchVerificationResult({
+        guildId: second.guildId,
+        nullifierHash: second.nullifierHash,
+      })
+    ).resolves.toMatchObject({ user_id: second.userId })
+  })
+})
+
+describe('store deployment policy', () => {
+  it('fails both verification-result reads and writes without a shared store', async () => {
+    const previousLocalOptIn = process.env.INTEGRATION_API_ALLOW_LOCAL_STORE
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    process.env.INTEGRATION_API_ALLOW_LOCAL_STORE = ''
+
+    try {
+      const token = await signToken()
+      const getResponse = await routes.verificationResultGET(
+        new NextRequest(
+          `${API_URL}/discord/verification-result?guild_id=blocked&nullifier_hash=0x1`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+      )
+      const postResponse = await routes.verificationResultPOST(
+        new NextRequest(`${API_URL}/discord/verification-result`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            guild_id: 'blocked',
+            nullifier_hash: '0x1',
+            signal_type: CredentialType.Orb,
+            user_id: 'user-1',
+            environment: 'production',
+          }),
+        })
+      )
+
+      expect(getResponse.status).toBe(500)
+      expect(postResponse.status).toBe(500)
+    } finally {
+      if (previousLocalOptIn === undefined) {
+        delete process.env.INTEGRATION_API_ALLOW_LOCAL_STORE
+      } else {
+        process.env.INTEGRATION_API_ALLOW_LOCAL_STORE = previousLocalOptIn
+      }
+      consoleError.mockRestore()
+    }
   })
 })
 
@@ -234,6 +370,7 @@ describe('authorization', () => {
           nullifier_hash: '0x1',
           signal_type: 'orb',
           user_id: 'user-9',
+          environment: 'production',
         }),
       })
     )

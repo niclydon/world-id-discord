@@ -14,6 +14,12 @@ The bot verifies against a World ID 4.0 relying party (RP):
 4. Actions are created automatically on first verification, using the action description the widget sends. There is no separate action registration step.
 5. Leave `NEXT_PUBLIC_WORLD_ID_ENVIRONMENT` unset (or set it to `production`) for a production deployment. The server pins the environment it accepts proofs from: a result stamped with another environment is rejected before verification, the forwarded result is pinned to the expected environment, and the verify response's environment is checked again. Set it to `staging` only for testing with the World ID Simulator; an RP registered in both environments would otherwise accept a simulator proof on a production deployment.
 
+`NEXT_PUBLIC_WORLD_ID_ENVIRONMENT` pins both the IDKit request and the server's
+accepted proof environment to `production`, `staging`, or `sandbox`. It
+defaults to `production`. A missing or mismatched environment in a returned
+proof is rejected before any stored-record role restoration or verification.
+The Developer Portal verification response must report the same environment.
+
 `NEXT_PUBLIC_APP_ID` alone is deprecated as the verification identifier: the verify endpoint still accepts it as a fallback for migrated apps for one release (a deprecation warning is logged), but the RP context endpoint requires `NEXT_PUBLIC_RP_ID` and `RP_SIGNING_KEY`, so new deployments must set all three variables.
 
 See `@types/env.d.ts` for the full list of environment variables.
@@ -40,13 +46,22 @@ secret (subject `discord-integration`, the app URL as issuer, the
 integration API URL as audience); the stand-in verifies the same
 claims and rejects anything else.
 
-Records are stored in Postgres when `INTEGRATION_API_DATABASE_URL` or
-`DATABASE_URL` is set (on Vercel, connecting a Neon database to the
-project injects `DATABASE_URL`; tables are created on first use). With
-no database configured, records fall back to a JSON file
-(`INTEGRATION_API_STORE_FILE`, or a file in the OS temp directory),
-which is enough for local development but is not durable across
-serverless instances.
+The integration API requires Postgres through `INTEGRATION_API_DATABASE_URL` or
+`DATABASE_URL` (on Vercel, connecting a Neon database to the project injects
+`DATABASE_URL`; tables are created on first use). Without either URL,
+integration API requests fail closed and cannot grant roles. Development and
+tests can explicitly opt into a JSON file (`INTEGRATION_API_ALLOW_LOCAL_STORE=true`
+and `INTEGRATION_API_STORE_FILE`, or a file in the OS temp directory). The local
+store is disabled on Vercel, whenever `NEXT_PUBLIC_APP_ENV` is not `development`,
+and whenever `NODE_ENV` is absent or production.
+File storage is limited to one process; it does not enforce ownership across
+processes or serverless instances.
+
+Verification results are immutable by guild and nullifier: exact retries
+succeed, while a different Discord user, credential type, or World ID
+environment receives a `409` conflict and cannot replace the existing record.
+Rows written by older versions without an environment fail closed for role
+restoration and need an explicit, verified migration.
 
 ## Local development
 

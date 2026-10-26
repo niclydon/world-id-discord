@@ -9,6 +9,7 @@ import { ensureGuildRolesExist } from '@/lib/discord/ensure-guild-roles-exist'
 import { getGuildData } from '@/lib/discord/get-guild-data'
 import { userHasRoles } from '@/lib/discord/user-has-roles'
 import { CredentialType } from '@/types/credential-type'
+import { ExternalFetchError } from '@/utils/external-fetch-error'
 import { hashSignal } from '@worldcoin/idkit-core/hashing'
 import { APIGuild, APIRole } from 'discord-api-types/v10'
 import { NextRequest } from 'next/server'
@@ -63,6 +64,7 @@ const makeBody = (resultOverrides: Record<string, unknown> = {}) => ({
   result: {
     protocol_version: '3.0',
     nonce: 'nonce-1',
+    environment: 'production',
     action: GUILD_ID,
     environment: 'production',
     responses: [
@@ -92,6 +94,7 @@ beforeEach(() => {
 
   process.env.NEXT_PUBLIC_RP_ID = 'rp_test123'
   process.env.NEXTAUTH_URL = 'http://localhost:3000'
+  process.env.NEXT_PUBLIC_WORLD_ID_ENVIRONMENT = 'production'
   delete process.env.NEXT_PUBLIC_APP_ID
   delete process.env.NEXT_PUBLIC_WORLD_ID_ENVIRONMENT
 
@@ -219,6 +222,53 @@ describe('POST /api/verification/complete', () => {
     expect(saveVerificationResult).not.toHaveBeenCalled()
   })
 
+  it('does not save or grant roles when the Portal reports a different environment', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          action: GUILD_ID,
+          nullifier: NULLIFIER,
+          protocol_version: '3.0',
+          environment: 'staging',
+          results: [{ identifier: 'orb', success: true, nullifier: NULLIFIER }],
+        })
+      )
+    )
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(400)
+    expect(saveVerificationResult).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
+  it('does not grant roles when another user wins the nullifier write race', async () => {
+    vi.mocked(saveVerificationResult).mockRejectedValue(
+      new ExternalFetchError('Failed to save verification result', {
+        cause: { status: 409, data: { success: false, error: 'conflict' } },
+      })
+    )
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(409)
+    const payload = (await response.json()) as { errorCode?: string }
+    expect(payload.errorCode).toBe(VerificationError.AlreadyVerified)
+    expect(saveVerificationResult).toHaveBeenCalledOnce()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
+  it('does not grant roles when saving the verified proof fails', async () => {
+    vi.mocked(saveVerificationResult).mockRejectedValue(new Error('storage unavailable'))
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(500)
+    expect(saveVerificationResult).toHaveBeenCalledOnce()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
   it('does not grant roles for a proof minted for a different guild', async () => {
     const response = await post(makeBody({ action: 'another-guild' }))
 
@@ -226,6 +276,33 @@ describe('POST /api/verification/complete', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(assignRoles).not.toHaveBeenCalled()
     expect(saveVerificationResult).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing or mismatched proof environment before verification', async () => {
+    for (const environment of [undefined, 'sandbox']) {
+      const response = await post(makeBody({ environment }))
+      expect(response.status).toBe(400)
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
+    expect(saveVerificationResult).not.toHaveBeenCalled()
+  })
+
+  it('does not restore roles from a stored record with a mismatched proof environment', async () => {
+    vi.mocked(fetchVerificationResult).mockResolvedValue({
+      guild_id: GUILD_ID,
+      nullifier_hash: NULLIFIER,
+      signal_type: CredentialType.Orb,
+      user_id: USER_ID,
+      environment: 'production',
+    })
+
+    const response = await post(makeBody({ environment: 'staging' }))
+
+    expect(response.status).toBe(400)
+    expect(fetchVerificationResult).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
   })
 
   it('does not grant roles for a proof bound to a different user', async () => {
@@ -254,6 +331,7 @@ describe('POST /api/verification/complete', () => {
       nullifier_hash: NULLIFIER,
       signal_type: CredentialType.Orb,
       user_id: 'someone-else',
+      environment: 'production',
     })
 
     const response = await post(makeBody())
@@ -266,12 +344,57 @@ describe('POST /api/verification/complete', () => {
     expect(assignRoles).not.toHaveBeenCalled()
   })
 
+  it('does not grant or restore roles when the ownership lookup is unavailable', async () => {
+    vi.mocked(fetchVerificationResult).mockRejectedValue(new Error('shared store unavailable'))
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(500)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(saveVerificationResult).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
+  it('does not restore roles from another World ID environment', async () => {
+    vi.mocked(fetchVerificationResult).mockResolvedValue({
+      guild_id: GUILD_ID,
+      nullifier_hash: NULLIFIER,
+      signal_type: CredentialType.Orb,
+      user_id: USER_ID,
+      environment: 'sandbox',
+    })
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(409)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(saveVerificationResult).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
+  it('does not restore roles from a legacy record with no environment', async () => {
+    const legacyResult = {
+      guild_id: GUILD_ID,
+      nullifier_hash: NULLIFIER,
+      signal_type: CredentialType.Orb,
+      user_id: USER_ID,
+    } as NonNullable<Awaited<ReturnType<typeof fetchVerificationResult>>>
+    vi.mocked(fetchVerificationResult).mockResolvedValue(legacyResult)
+
+    const response = await post(makeBody())
+
+    expect(response.status).toBe(409)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(assignRoles).not.toHaveBeenCalled()
+  })
+
   it('restores roles for the recorded user without re-verifying the proof', async () => {
     vi.mocked(fetchVerificationResult).mockResolvedValue({
       guild_id: GUILD_ID,
       nullifier_hash: NULLIFIER,
       signal_type: CredentialType.Orb,
       user_id: USER_ID,
+      environment: 'production',
     })
 
     const response = await post(makeBody())

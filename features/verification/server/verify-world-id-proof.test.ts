@@ -122,13 +122,11 @@ describe('verifyWorldIdProof', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('pins the forwarded environment when the result omits it', async () => {
-    fetchMock.mockResolvedValue(portalSuccess())
-
-    const verification = await verifyWorldIdProof(makeResult({ environment: undefined }))
-
-    expect(verification.success).toBe(true)
-    expect(forwardedBody().environment).toBe('production')
+  it('rejects a result without an environment before calling the portal', async () => {
+    await expect(verifyWorldIdProof(makeResult({ environment: undefined }))).rejects.toThrow(
+      ProofEnvironmentError
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('fails when the portal verified the proof in a different environment', async () => {
@@ -215,8 +213,10 @@ describe('assertProofEnvironment', () => {
     expect(() => assertProofEnvironment(makeResult())).not.toThrow()
   })
 
-  it('accepts a proof that omits the environment (it is pinned when forwarded)', () => {
-    expect(() => assertProofEnvironment(makeResult({ environment: undefined }))).not.toThrow()
+  it('rejects a proof that omits the environment', () => {
+    expect(() => assertProofEnvironment(makeResult({ environment: undefined }))).toThrow(
+      ProofEnvironmentError
+    )
   })
 
   it('rejects a proof from another environment', () => {

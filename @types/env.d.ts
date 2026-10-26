@@ -19,6 +19,7 @@ declare namespace NodeJS {
     // verification identifier; see NEXT_PUBLIC_RP_ID.
     NEXT_PUBLIC_APP_ID: `app_${string}` | undefined
     NEXT_PUBLIC_RP_ID: `rp_${string}` | undefined
+    NEXT_PUBLIC_WORLD_ID_ENVIRONMENT: 'production' | 'staging' | 'sandbox' | undefined
     // RP signing key (hex). Server only; never expose to the client.
     RP_SIGNING_KEY: string | undefined
     // World ID environment this deployment accepts proofs from. Defaults to
@@ -45,5 +46,7 @@ declare namespace NodeJS {
     // JSON file backing the integration API store when no database is
     // configured; ':memory:' selects an in-memory store.
     INTEGRATION_API_STORE_FILE: string | undefined
+    // Explicit opt-in for local file/memory storage; ignored on Vercel and in production.
+    INTEGRATION_API_ALLOW_LOCAL_STORE: string | undefined
   }
 }

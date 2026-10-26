@@ -22,10 +22,10 @@ import { userHasRoles } from '@/lib/discord/user-has-roles'
 import { resolveRpId } from '@/lib/world-id/resolve-rp-id'
 import { verificationCompleteInputSchema } from '@/schemas/verification-complete'
 import { CredentialType } from '@/types/credential-type'
+import { ExternalFetchError } from '@/utils/external-fetch-error'
 import { safeCall } from '@/utils/safe-call'
 import { getTranslations } from 'next-intl/server'
 import { NextRequest } from 'next/server'
-import { inspect } from 'util'
 
 export const POST = async (request: NextRequest) => {
   const originalBody = await request.json()
@@ -136,6 +136,19 @@ export const POST = async (request: NextRequest) => {
       code: 400,
       errorCode: VerificationError.AlreadyVerified,
       message: t('Discord_Integration_Complete_Verification_Already_Verified'),
+    })
+  }
+
+  // A prior record from another World ID environment cannot restore roles.
+  // Legacy records without an environment also require an explicit migration.
+  if (
+    internalVerificationResult &&
+    internalVerificationResult.environment !== result.environment
+  ) {
+    return sendDiscordErrorMessageResponse({
+      token,
+      code: 409,
+      message: t('Discord_Integration_Complete_Verification_Unable_To_Verify_Proof'),
     })
   }
 
@@ -341,14 +354,22 @@ export const POST = async (request: NextRequest) => {
     nullifierHash: verifiedNullifier,
     credentialType,
     userId,
+    environment: result.environment,
   })
 
   if (!saveVerificationResultResponse.success) {
-    console.error(
-      'Error saving verification result',
-      saveVerificationResultResponse.error,
-      inspect(saveVerificationResultResponse.error.cause, { depth: 10 })
-    )
+    const saveError = saveVerificationResultResponse.error
+
+    if (saveError instanceof ExternalFetchError && saveError.cause.status === 409) {
+      return sendDiscordErrorMessageResponse({
+        token,
+        code: 409,
+        errorCode: VerificationError.AlreadyVerified,
+        message: t('Discord_Integration_Complete_Verification_Already_Verified'),
+      })
+    }
+
+    console.error('Error saving verification result', saveError.message)
 
     return sendDiscordErrorMessageResponse({
       token,
