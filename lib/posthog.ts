@@ -1,6 +1,7 @@
 import { EventMessage, PostHog } from 'posthog-node'
 
-type CaptureResult = { success: true; params: EventMessage } | { success: false; error: unknown }
+type CaptureResult =
+  { success: true; params: EventMessage } | { success: false; error: unknown }
 
 type PostHogClientShape = {
   capture: (params: EventMessage) => Promise<CaptureResult>
