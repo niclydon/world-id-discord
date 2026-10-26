@@ -20,10 +20,9 @@ export const idKitResultSchema = z
     nonce: z.string(),
     action: z.string().optional(),
     action_description: z.string().optional(),
-    // IDKit 4 stamps every result with the environment it was produced in. The
-    // server asserts it against the deployment's expected environment before
-    // verifying (see `assertProofEnvironment`); any other string is malformed.
-    environment: z.enum(['production', 'staging', 'sandbox']).optional(),
+    // IDKit 4 stamps every result with its environment. Require it so stored
+    // records cannot silently lose their production/staging boundary.
+    environment: z.enum(['production', 'staging', 'sandbox']),
     responses: z.array(responseItemSchema).min(1),
   })
   .passthrough()

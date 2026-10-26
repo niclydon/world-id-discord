@@ -19,6 +19,7 @@ declare namespace NodeJS {
     // verification identifier; see NEXT_PUBLIC_RP_ID.
     NEXT_PUBLIC_APP_ID: `app_${string}` | undefined
     NEXT_PUBLIC_RP_ID: `rp_${string}` | undefined
+    NEXT_PUBLIC_WORLD_ID_ENVIRONMENT: 'production' | 'staging' | 'sandbox' | undefined
     // RP signing key (hex). Server only; never expose to the client.
     RP_SIGNING_KEY: string | undefined
     // World ID environment this deployment accepts proofs from. Defaults to
@@ -35,5 +36,17 @@ declare namespace NodeJS {
     DISCORD_INTEGRATION_API_URL: string | undefined
     DISCORD_INTEGRATION_API_SIGN_SECRET: string | undefined
     DISCORD_INTERACTION_TOKEN_SIGN_SECRET: string | undefined
+
+    // Self-hosted Discord integration API (app/discord/* routes)
+    // Postgres connection string for the integration API store. The Neon
+    // integration on Vercel injects DATABASE_URL when a database is
+    // connected to the project.
+    INTEGRATION_API_DATABASE_URL: string | undefined
+    DATABASE_URL: string | undefined
+    // JSON file backing the integration API store when no database is
+    // configured; ':memory:' selects an in-memory store.
+    INTEGRATION_API_STORE_FILE: string | undefined
+    // Explicit opt-in for local file/memory storage; ignored on Vercel and in production.
+    INTEGRATION_API_ALLOW_LOCAL_STORE: string | undefined
   }
 }

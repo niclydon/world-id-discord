@@ -8,6 +8,7 @@ export type SaveVerificationResultInput = {
   nullifierHash: string
   credentialType: CredentialType
   userId: string
+  environment: 'production' | 'staging' | 'sandbox'
 }
 
 export const saveVerificationResult = async (input: SaveVerificationResultInput) => {
@@ -26,6 +27,7 @@ export const saveVerificationResult = async (input: SaveVerificationResultInput)
       nullifier_hash: input.nullifierHash,
       signal_type: input.credentialType,
       user_id: input.userId,
+      environment: input.environment,
     }),
   })
 

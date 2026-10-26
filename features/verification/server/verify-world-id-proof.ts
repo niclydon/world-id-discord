@@ -54,7 +54,7 @@ export class ProofEnvironmentError extends Error {}
 export const assertProofEnvironment = (result: VerificationResultPayload) => {
   const expected = resolveWorldIdEnvironment()
 
-  if (result.environment !== undefined && result.environment !== expected) {
+  if (result.environment !== expected) {
     throw new ProofEnvironmentError(
       `Proof environment "${result.environment}" does not match the expected environment "${expected}"`
     )
@@ -135,6 +135,12 @@ export const assertProofBinding = (
   result: VerificationResultPayload,
   { guildId, userId }: { guildId: string; userId: string }
 ) => {
+  if (result.environment !== resolveWorldIdEnvironment()) {
+    throw new ProofBindingError(
+      'Proof environment does not match the configured World ID environment'
+    )
+  }
+
   if (result.action !== guildId) {
     throw new ProofBindingError('Proof action does not match the guild id')
   }

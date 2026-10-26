@@ -102,7 +102,7 @@ const middleware = async (req: NextRequest) => {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next|_vercel|favicon.ico|.*\\..*).*)'],
+  matcher: ['/((?!api|discord|_next|_vercel|favicon.ico|.*\\..*).*)'],
 }
 
 export default middleware

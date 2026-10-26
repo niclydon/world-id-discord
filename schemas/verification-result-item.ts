@@ -6,6 +6,7 @@ export const verificationResultItemSchema = z.object({
   nullifier_hash: z.string(),
   signal_type: z.nativeEnum(CredentialType),
   user_id: z.string(),
+  environment: z.enum(['production', 'staging', 'sandbox']),
 })
 
 export type VerificationResultItem = z.infer<typeof verificationResultItemSchema>
