@@ -6,7 +6,7 @@ import { resolveSignInGuild } from './resolve-signin-guild'
 
 const CLIENT_ID = process.env.DISCORD_APP_ID
 const CLIENT_SECRET = process.env.DISCORD_APP_SECRET
-const scope = ['identify', 'bot', 'applications.commands'].join(' ')
+const scope = ['identify', 'guilds', 'bot', 'applications.commands'].join(' ')
 const permissions = '268435456'
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
@@ -18,6 +18,10 @@ export const authOptions: AuthOptions = {
     DiscordProvider({
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
+      // Discord answers authorize requests with an `iss` parameter
+      // (RFC 9207); openid-client requires the issuer to be configured
+      // to validate it, and the built-in provider does not set one.
+      issuer: 'https://discord.com',
       authorization: { params: { scope, permissions } },
     }),
   ],

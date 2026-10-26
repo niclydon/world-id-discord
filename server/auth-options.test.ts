@@ -212,3 +212,30 @@ describe('authOptions signIn callback', () => {
     )
   })
 })
+
+describe('authOptions Discord provider configuration', () => {
+  const providerConfig = async () => {
+    const { authOptions } = await import('./auth-options')
+    const provider = (authOptions.providers[0] ?? {}) as unknown as Record<string, unknown>
+
+    return {
+      ...provider,
+      ...((provider.options as Record<string, unknown> | undefined) ?? {}),
+    } as {
+      issuer?: string
+      authorization?: { params?: { scope?: string } }
+    }
+  }
+
+  it('configures the Discord issuer so the OAuth callback can validate the iss response parameter', async () => {
+    const provider = await providerConfig()
+
+    expect(provider.issuer).toBe('https://discord.com')
+  })
+
+  it("requests the guilds scope so the fallback can read the user's guilds", async () => {
+    const provider = await providerConfig()
+
+    expect(provider.authorization?.params?.scope?.split(' ')).toContain('guilds')
+  })
+})
