@@ -66,6 +66,17 @@ The test creates and drops uniquely named schemas. It executes the store's
 production SQL over a PostgreSQL wire connection; it does not validate the
 hosted Neon HTTP transport or deployment credentials.
 
+## Admin sign-in fallback
+
+When Discord omits the selected guild from the OAuth token response, the app
+looks for one guild the user can administer and the bot has joined. It checks
+the bot's guild list in pages of 200 and rejects sign-in if the list is
+incomplete or more than one guild qualifies. The fallback is bounded to 25
+pages and does not support Discord's large bot sharding mode, which requires
+the `shard` query parameter. It fails closed for those bots. An authenticated
+user whose admin permission check fails sees an access message instead of
+being sent through OAuth again.
+
 ## Local development
 
 For local development, you also will need [ngrok](https://ngrok.com/). After you log in, you can reach the [Setup & Installation](https://dashboard.ngrok.com/get-started/setup) section. There is an instruction on how to launch and configure `ngrok`

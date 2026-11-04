@@ -20,18 +20,22 @@ export const assignRoles = async (input: AssignRolesInput) => {
   const assignedRoles = guild.roles.filter(role => rolesToAssign.includes(role.id))
 
   if (process.env.NODE_ENV === 'production') {
-    const posthog = PostHogClient()
+    try {
+      const posthog = PostHogClient()
 
-    const captureResult = await posthog.capture({
-      event: 'discord integration verification',
-      distinctId: userId,
-    })
+      const captureResult = await posthog.capture({
+        event: 'discord integration verification',
+        distinctId: userId,
+      })
 
-    if (!captureResult.success) {
-      console.error(captureResult.error)
+      if (!captureResult.success) {
+        console.error(captureResult.error)
+      }
+
+      await posthog.shutdown()
+    } catch (error) {
+      console.error('Error reporting verification analytics', error)
     }
-
-    await posthog.shutdown()
   }
 
   return assignedRoles
